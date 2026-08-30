@@ -98,8 +98,8 @@ def predict(sample: WaterInput):
   
     df = pd.DataFrame([data], columns=FEATURES).fillna(medians).astype(float)
 
-    pred = int(model.predict(df)[0])
     proba_potable = float(model.predict_proba(df)[0][1])
+    pred=int(proba_potable>0.5)
 
     return {
         "potability": pred,
