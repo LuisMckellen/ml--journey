@@ -42,7 +42,6 @@ def train():
     X_train, X_test, y_train, y_test, medians = load_and_prepare_data()
     feature_order = X_train.columns.tolist()
     print(f"Train: {len(X_train)} rows, Test: {len(X_test)} rows")
-
     model = XGBClassifier(random_state=42)
     model.fit(X_train, y_train)
 
