@@ -1,3 +1,4 @@
+import json
 import pathlib
 import sys
 sys.path.append(str(pathlib.Path(__file__).parent.parent))
@@ -16,6 +17,23 @@ VALID = {
     "Trihalomethanes": 60,
     "Turbidity": 4,
 }
+
+
+def post_raw(body):
+    """POST a raw JSON string.
+
+    httpx serialises with allow_nan=False, so the bare NaN/Infinity literals
+    that json.loads accepts on the server side cannot be sent via json=.
+    """
+    return client.post(
+        "/predict", content=body, headers={"Content-Type": "application/json"}
+    )
+
+
+def body_with(field, literal):
+    """VALID as raw JSON, with one field replaced by a bare JSON literal."""
+    rest = {k: v for k, v in VALID.items() if k != field}
+    return json.dumps(rest).rstrip("}") + f', "{field}": {literal}}}'
 
 
 def test_ping():
@@ -51,3 +69,31 @@ def test_missing_field_is_imputed():
     resp = client.post("/predict", json=payload)
     assert resp.status_code == 200
     assert resp.json()["imputed_fields"] == ["Sulfate"]
+
+
+def test_infinity_is_rejected():
+    resp = post_raw(body_with("Hardness", "Infinity"))
+    assert resp.status_code == 422
+    assert "Hardness must be a finite number" in resp.text
+
+
+def test_negative_infinity_is_rejected():
+    resp = post_raw(body_with("Hardness", "-Infinity"))
+    assert resp.status_code == 422
+
+
+def test_float_overflow_is_rejected():
+    # 1e400 has no float representation and parses to inf
+    resp = post_raw(body_with("Solids", "1e400"))
+    assert resp.status_code == 422
+    assert "Solids must be a finite number" in resp.text
+
+
+def test_nan_is_rejected_not_silently_imputed():
+    # NaN used to pass validation, get median-imputed by fillna, and then be
+    # omitted from imputed_fields - the caller saw a population value reported
+    # as their own
+    resp = post_raw(body_with("Sulfate", "NaN"))
+    assert resp.status_code == 422
+    assert "Sulfate must be a finite number" in resp.text
+
