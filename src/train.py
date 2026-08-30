@@ -22,13 +22,10 @@ def load_and_prepare_data():
     X = df.drop("Potability", axis=1)
     y = df["Potability"]
 
-    # split first, then learn medians on train only — imputing before the
-    # split leaks test-set distribution into training
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=SEED, stratify=y
-    )
+
+    X_train, X_test, y_train, y_test = train_test_split( X, y, test_size=0.2, random_state=SEED, stratify=y)
     medians = X_train.median()
-    X_train = X_train.fillna(medians).astype(float)
+    X_train= X_train.fillna(medians).astype(float)
     X_test = X_test.fillna(medians).astype(float)
     
   

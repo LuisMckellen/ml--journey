@@ -16,13 +16,14 @@ def load_and_prepare_data():
     df = pd.read_csv(DATA_PATH)
     X = df.drop("Potability", axis=1)
     y = df["Potability"]
-    return X_train, X_test, y_train, y_test
+    return train_test_split(X,y,test_size=0.2,random_state=SEED,stratify=y)
 
 
-def train():
+def validate():
     print(f"xgboost {xgboost.__version__}")
     print(f"Looking for CSV at: {DATA_PATH}")
-    X_train,X_test,y_train,y_test,medians=load_and_prepare_data()
+    X_train,X_test,y_train,y_test=load_and_prepare_data()
+   
     recall_0_scores = []
     recall_1_scores = []
     macro_f1_scores = []
@@ -39,10 +40,10 @@ def train():
         y_val_pred=model.predict(X_val)   
         recall_0_scores.append(recall_score(y_val,y_val_pred,pos_label=0))
         recall_1_scores.append(recall_score(y_val,y_val_pred,pos_label=1))
-        macro_f1_scores.append(f1_score(y_val,y_val_pred,average='macro')
+        macro_f1_scores.append(f1_score(y_val,y_val_pred,average='macro'))
         print(f"Fold {fold}: recall_0={recall_0_scores[-1]:.4f}, recall_1={recall_1_scores[-1]:.4f}, macro_f1={macro_f1_scores[-1]:.4f}")
     print(f"\nrecall_0: {np.mean(recall_0_scores):.4f} ± {np.std(recall_0_scores, ddof=1):.4f}")
     print(f"recall_1: {np.mean(recall_1_scores):.4f} ± {np.std(recall_1_scores, ddof=1):.4f}")
     print(f"macro_f1: {np.mean(macro_f1_scores):.4f} ± {np.std(macro_f1_scores, ddof=1):.4f}")      
 if __name__ == "__main__":
-    train()
+    validate()
