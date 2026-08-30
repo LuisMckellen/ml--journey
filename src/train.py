@@ -28,8 +28,8 @@ def load_and_prepare_data():
         X, y, test_size=0.2, random_state=SEED, stratify=y
     )
     medians = X_train.median()
-    X_train = X_train.fillna(medians)
-    X_test = X_test.fillna(medians)
+    X_train = X_train.fillna(medians).astype(float)
+    X_test = X_test.fillna(medians).astype(float)
     
   
     return X_train, X_test, y_train, y_test, medians
@@ -42,7 +42,7 @@ def train():
     X_train, X_test, y_train, y_test, medians = load_and_prepare_data()
     feature_order = X_train.columns.tolist()
     print(f"Train: {len(X_train)} rows, Test: {len(X_test)} rows")
-    model = XGBClassifier(random_state=42)
+    model = XGBClassifier(random_state=SEED,n_estimators=100, max_depth=6,learning_rate=0.3)
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
@@ -59,7 +59,7 @@ def train():
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model.save_model(MODEL_PATH)
     with open(MEDIAN_PATH, "wb") as f:
-        pickle.dump(medians, f)
+        pickle.dump(medians.astype(float), f)
     with open(FEATURES_PATH, "wb") as f:
         pickle.dump(feature_order, f)
 
