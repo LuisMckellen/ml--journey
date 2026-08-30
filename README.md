@@ -1,5 +1,6 @@
 # Water Potability — Prediction API
 
+![CI](https://github.com/LuisMckellen/ml--journey/actions/workflows/ci.yml/badge.svg)
 **Live:** https://ml-journey-mpqh.onrender.com · [Docs](https://ml-journey-mpqh.onrender.com/docs)
 A binary classifier for drinking-water safety, served as a FastAPI
 endpoint and deployed as a container. Nine water-quality measurements
