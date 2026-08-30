@@ -6,4 +6,5 @@ __pycache__/
 .gitignore
 Notebooks/
 data/
+validate.py
 README.md
