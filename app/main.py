@@ -1,3 +1,4 @@
+import math
 import pickle
 from pathlib import Path
 
@@ -71,6 +72,13 @@ def predict(sample: WaterInput):
 
     if all(v is None for v in data.values()):
         raise HTTPException(status_code=422, detail="All fields None - provide at least one value")
+
+    # NaN/inf survive the range checks below (inf < 0 is False, and every
+    # comparison against NaN is False) and NaN would then be silently
+    # median-imputed without appearing in imputed_fields
+    for k, v in data.items():
+        if v is not None and not math.isfinite(v):
+            raise HTTPException(status_code=422, detail=f"{k} must be a finite number")
 
     if data.get("ph") is not None and not (0 <= data["ph"] <= 14):
         raise HTTPException(status_code=422, detail="ph must be 0-14")
