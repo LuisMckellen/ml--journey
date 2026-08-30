@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 import xgboost
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from xgboost import XGBClassifier
 
 from .schemas import WaterInput
@@ -15,11 +18,6 @@ MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 MODEL_PATH = MODEL_DIR / "model.json"
 MEDIAN_PATH = MODEL_DIR / "medians.pkl"
 FEATURES_PATH = MODEL_DIR / "features.pkl"
-
-NON_NEGATIVE = [
-    "Hardness", "Solids", "Chloramines", "Sulfate",
-    "Conductivity", "Organic_carbon", "Trihalomethanes", "Turbidity",
-]
 
 model = None
 medians = None
@@ -42,6 +40,29 @@ except Exception as e:
     model = None
     medians = None
     FEATURES = []
+
+
+def _json_safe(o):
+    """Replace non-finite floats with their repr, recursively.
+
+    Pydantic echoes the offending value back as `input`, and Starlette renders
+    responses with json.dumps(allow_nan=False). A rejected inf/NaN would then
+    raise while serialising the 422 and surface as a 500 instead.
+    """
+    if isinstance(o, float) and not math.isfinite(o):
+        return repr(o)
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
+
+
+@api.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422, content={"detail": _json_safe(jsonable_encoder(exc.errors()))}
+    )
 
 
 @api.get("/ping")
@@ -72,20 +93,6 @@ def predict(sample: WaterInput):
 
     if all(v is None for v in data.values()):
         raise HTTPException(status_code=422, detail="All fields None - provide at least one value")
-
-    # NaN/inf survive the range checks below (inf < 0 is False, and every
-    # comparison against NaN is False) and NaN would then be silently
-    # median-imputed without appearing in imputed_fields
-    for k, v in data.items():
-        if v is not None and not math.isfinite(v):
-            raise HTTPException(status_code=422, detail=f"{k} must be a finite number")
-
-    if data.get("ph") is not None and not (0 <= data["ph"] <= 14):
-        raise HTTPException(status_code=422, detail="ph must be 0-14")
-
-    for k in NON_NEGATIVE:
-        if data.get(k) is not None and data[k] < 0:
-            raise HTTPException(status_code=422, detail=f"{k} must be >=0")
 
     imputed_fields = [k for k, v in data.items() if v is None]
   
