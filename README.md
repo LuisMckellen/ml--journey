@@ -137,6 +137,8 @@ local uvicorn, the Docker container, and the live Render deployment.
 
 `probability_potable` is raw XGBoost output, not a calibrated
 probability — it orders samples correctly but isn't a true likelihood.
+prediction uses prob > 0.5 to match XGBoost's predict().
+No training sample has exactly 0.5, so >= vs > is equivalent here.
 
 All nine fields are optional. Omitted fields are filled with the
 training medians and named in `imputed_fields`, so a caller can see
