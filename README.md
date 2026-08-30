@@ -192,8 +192,8 @@ Python 3.14 · XGBoost 3.4.1 · FastAPI · pandas · pytest · Docker · Render
 
 ## Next
 
-- 5-fold cross-validation — a mean and a spread instead of one number
+- 5-fold cross-validation — a mean and a spread instead of one number - done
 - `scale_pos_weight` — does raising recall₁ improve macro F1, and what
   does it cost recall₀?
 - SHAP feature importance
-- GitHub Actions running pytest on every push
+- GitHub Actions running pytest on every push - done
