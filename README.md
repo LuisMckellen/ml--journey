@@ -1,52 +1,28 @@
-# Water Potability — Prediction API
-
 ![CI](https://github.com/LuisMckellen/ml--journey/actions/workflows/ci.yml/badge.svg)
-**Live:** https://ml-journey-mpqh.onrender.com · [Docs](https://ml-journey-mpqh.onrender.com/docs)
-A binary classifier for drinking-water safety, served as a FastAPI
-endpoint and deployed as a container. Nine water-quality measurements
-in, a potability prediction and the raw XGBoost probability out.
 
-> Free-tier hosting sleeps after 15 minutes of inactivity; the first
-> request may take ~50 seconds.
+# ml--journey
 
----
+ML work as a first-year CSE student. One project taken properly from raw data to a deployed service, instead of several that stop at the notebook.
 
-## The dataset
-3,276 samples, nine numeric features, binary `Potability` target.
-**61% not potable / 39% potable** — imbalanced enough that accuracy is
-misleading. Three columns have missing values: `Sulfate` (23.8%), `ph`
-(15.0%), `Trihalomethanes` (4.9%), imputed with medians **learned from
-the training split only**.
+## Water Potability
 
-## The leakage bug
+Predicting whether water is safe to drink from nine chemical measurements.
 
-The first working version computed medians on the full dataframe and
-then split, leaking the test set's distribution into training. It
-inflates the score without improving the model. Found by reading the
-code, not by a failing test — the pipeline ran cleanly and produced a
-plausible number the whole time. The fix is an ordering change:
+**Live API:** https://ml-journey-mpqh.onrender.com
 
-```python
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-medians = X_train.median()      # train only
-X_train = X_train.fillna(medians)
-X_test = X_test.fillna(medians)
-```
+The short version of what's below: the headline metric moves by ±0.017 depending on which random split you take, so it is reported as a distribution rather than a single number. Getting to that point required retracting two earlier claims in this README, both of which are kept here with their corrections attached.
 
-The old reported metric (macro F1 0.598) came from the leaky pipeline
-and has been retired. Everything below is post-fix.
+## Dataset
+
+- 3,276 samples, Kaggle, 9 chemical measurements: `ph`, `Hardness`, `Solids`, `Chloramines`, `Sulfate`, `Conductivity`, `Organic_carbon`, `Trihalomethanes`, `Turbidity`
+- Target: `Potability` (0 = not potable, 1 = potable), roughly 61/39 class split
+- Missing values in `Sulfate` (781 rows), `ph` (491), `Trihalomethanes` (162) — median-imputed. The other six columns have none.
+- `ph` runs exactly 0.00–14.00; `Solids` reaches ~61,000 while `Turbidity` stays under 7
+- Input validation: non-negative, upper bounds at dataset max +20%, `ph` clamped 0–14, non-finite values rejected
 
 ## Choosing the metric
 
-**Accuracy is wrong here.** 61% of samples are "not potable," so a model
-predicting that label every time scores 61% and has learned nothing.
-**Recall alone is gameable.** A false negative — calling unsafe water
-safe — is the costly error, which makes recall tempting. But recall of
-*which* class? A dummy predicting "not potable" always gets recall₀ =
-1.0000 while never identifying a single safe sample. Not hypothetical —
-logistic regression did exactly this:
+Accuracy is wrong here — 61% of samples are "not potable," so a model predicting that label every time scores 61% and has learned nothing. Recall alone is gameable too: a dummy predicting "not potable" always gets recall₀ = 1.0000 while never identifying a single safe sample. Not hypothetical — logistic regression did exactly this in early comparisons:
 
 | Model | macro F1 | recall₀ | recall₁ |
 |---|---|---|---|
@@ -54,79 +30,126 @@ logistic regression did exactly this:
 | RandomForest | 0.5887 | 0.8925 | 0.3047 |
 | XGBoost | 0.6015 | 0.8050 | 0.3984 |
 
-*Notebook environment; see the version note for why the XGBoost figure
-differs from the production metric.*
+*Single split, notebook environment. Given the instability documented below, the gap between RandomForest and XGBoost here is not meaningful — treat this table as evidence that LogisticRegression collapses, nothing finer.*
 
-Accuracy would have called that model 61% correct. Macro F1 — F1 per
-class, averaged unweighted — scores it 0.3788, because a model cannot
-score well on it without doing something useful on both classes.
-**Macro F1 is the metric used from here on.**
+Accuracy would have called the LogisticRegression model 61% correct. Macro F1 scores it 0.3788, because it can't score well without doing something useful on both classes — that's why macro F1 is the metric used throughout, not accuracy and not recall₀ alone.
 
 ## Results
-Production model, `src/train.py`, xgboost 3.4.1:
 
-| | precision | recall | f1 | support |
-|---|---|---|---|---|
-| 0 — not potable | 0.6520 | 0.8150 | 0.7244 | 400 |
-| 1 — potable | 0.5256 | 0.3203 | 0.3981 | 256 |
-| **macro avg** | 0.5888 | 0.5677 | **0.5613** | 656 |
+Production model, `src/train.py`, xgboost 3.4.1, hyperparameters pinned (`n_estimators=100`, `max_depth=6`, `learning_rate=0.3`), split seed 42.
 
-Accuracy 0.6220, against a 61% majority-class baseline.
-**The number with real-world cost is recall₀ = 0.8150.** The model
-catches 82% of unsafe samples; the 18% it misses are unsafe water called
-safe, which is the error that matters. That is also why the metric isn't
-recall₀ — optimising for it directly has a degenerate solution. Macro F1
-makes that impossible: protecting class 0 has to be earned.
+| Metric | Score |
+|---|---|
+| Macro F1 | 0.5613 |
+| Recall (not potable) | 0.8150 |
+| Recall (potable) | 0.3203 |
+| Accuracy | 0.6220 |
 
-Which is what recall₁ = 0.3203 measures. Not that potable-detection is
-the goal, but that the model leans on the majority class — a classifier
-at recall₀ = 0.99 / recall₁ = 0.05 would look safe while being useless.
-`scale_pos_weight` shifts this balance and will be applied as a
-question, not a fix: does raising recall₁ improve macro F1, and what
-does it cost recall₀? If macro F1 rises while recall₀ falls to 0.70,
-reject the trade.
+**That number is a pessimistic draw, and it is reported anyway.** Across split seeds 0–9, clean macro F1 averages **0.6068 ± 0.0168**, ranging 0.5826 to 0.6287. The deployed model's 0.5613 falls below all ten — roughly 2.7 standard deviations under the mean. Seed 42 produced an unusually hard test set.
 
-A single 656-row test split is noisy, so none of these figures have
-error bars yet. Cross-validation is next; until then, no tuning —
-picking a winner against one test set fits the test set, the same
-category of mistake as the leakage bug.
+The deployed model was not retrained on a friendlier seed. Picking the seed that flatters the model is selecting on the test set, which is the same error as leakage wearing a different hat. The honest summary is that this model scores **macro F1 ≈ 0.61 ± 0.02** on this data, and the particular artifact being served happens to land at the low end of that range.
 
-## The same code gave two different scores
+The number with real-world cost is recall₀ = 0.8150: the model catches 82% of unsafe samples, and the 18% it misses are unsafe water called safe. Flagging safe water as unsafe only wastes it. That is also exactly why the *metric* isn't recall₀ — optimising for it has a degenerate solution, as the table above shows.
 
-The baseline notebook reported macro F1 **0.6015**. `src/train.py`
-reported **0.5613**. Same CSV, same 2620/656 stratified split, same
-`random_state=42`, no duplicates dropped. Ruled out in order: split
-parameters, model seed, `eval_metric`.
+**5-fold stratified CV** (`src/validate.py`, on the 2,620-row train split, medians recomputed inside each fold):
 
-The cause was the environment. The notebook ran on **xgboost 3.2.0**;
-the local venv runs **3.4.1**. Default hyperparameters changed between
-those releases, so "XGBClassifier with defaults" describes two different
-models depending on where it runs.
+| Metric | Mean ± std |
+|---|---|
+| Macro F1 | 0.5957 ± 0.0060 |
+| Recall (not potable) | 0.7804 ± 0.0291 |
+| Recall (potable) | 0.4110 ± 0.0271 |
 
-What changed as a result:
+Per-fold macro F1: 0.6054, 0.5917, 0.5900, 0.5961, 0.5954.
 
-- **The metric is reported with the version that produced it.** *macro F1
-  0.5613, xgboost 3.4.1* is the claim; the number alone isn't one.
-- **Hyperparameters are pinned explicitly** — `n_estimators=100`,
-  `max_depth=6`, `learning_rate=0.3` — not inherited from defaults.
-- **The model is saved with `save_model`, not pickled.** A pickled
-  booster is tied to the version that wrote it; `model.json` isn't.
-- **`/ping` reports the running xgboost version**, so a deployed
-  instance can be checked against the environment the metric came from.
+Note that CV's ± 0.0060 badly understates real uncertainty. All five folds draw from the same 2,620-row pool and overlap heavily in training data, so their agreement is partly an artifact of sharing. Resampling the split entirely gives ± 0.0168 — nearly three times wider. **k-fold spread answers "how consistent is this across folds of one sample," not "how would this do on a different sample."** The CV mean of 0.5957 and the seed-sweep mean of 0.6068 agree well; it was seed 42's test split, not the CV, that was the outlier.
 
-Verified end to end — the same request returns `0.1700534224510193` from
-local uvicorn, the Docker container, and the live Render deployment.
+## Stability
 
-## API
-`POST /predict`
+`src/stability.py`, 30 training runs.
 
-```json
-{
-  "ph": 7.0, "Hardness": 200, "Solids": 20000,
-  "Chloramines": 7, "Sulfate": 300, "Conductivity": 400,
-  "Organic_carbon": 15, "Trihalomethanes": 60, "Turbidity": 4
-}
+| Source of variation | Spread in macro F1 |
+|---|---|
+| Train/test split seed | 0.0168 (range 0.0460) |
+| Model seed, split fixed | **0.0000** |
+
+XGBoost is fully deterministic here given fixed data and pinned hyperparameters — `random_state` on the model changes nothing. All variance is data-side.
+
+The sharpest result: the leaky-vs-clean *difference*, measured on identical splits, has a spread of 0.0270 — wider than the split-driven spread itself. The only thing separating those two pipelines is ~490 `ph` values shifted by 0.0017 and ~160 `Trihalomethanes` values shifted by 0.057 (see below). A perturbation that small, in two columns, moving the metric that much means the model sits on a knife edge: small input changes flip enough tree split thresholds to cascade through the predictions.
+
+That is consistent with everything else known about this dataset — no feature correlates with the target above 0.05, and a shuffled-label control showed only weak signal.
+
+## The leakage experiment, and a retraction
+
+The first working version computed medians on the full dataframe and then split, leaking the test distribution into training. Found by reading the code, not by a failing test. The fix is an ordering change:
+
+```python
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=SEED, stratify=y
+)
+medians = X_train.median()      # train only
+X_train = X_train.fillna(medians)
+X_test = X_test.fillna(medians)
 ```
+
+At seed 42, clean scored 0.5613 and leaky scored 0.6126 — a gap of +0.0513, which this README previously reported as the cost of the leak.
+
+**That was wrong.** Run across ten split seeds, the leaky-minus-clean difference is:
+
+| | mean | std | min | max |
+|---|---|---|---|---|
+| leaky − clean | **−0.0092** | 0.0270 | −0.0555 | +0.0250 |
+
+The effect straddles zero and is slightly negative on average. The +0.0513 at seed 42 was split noise, not a leakage advantage.
+
+Diffing the median vectors directly shows why it could never have been large:
+
+| Column | full data | train only | diff | n missing |
+|---|---|---|---|---|
+| Sulfate | 333.073546 | 333.073546 | **0.000000** | 781 |
+| ph | 7.036752 | 7.035037 | 0.001715 | 491 |
+| Trihalomethanes | 66.622485 | 66.565709 | 0.056776 | 162 |
+
+`Sulfate`, the column with the most missing values, has an identical median either way. The other two differ by 0.02% and 0.085%. The leaky and clean pipelines train on very nearly the same data, so there was almost no test-set information available to transfer.
+
+**The leak is still worth fixing, but for a different reason than the obvious one.** Leaky runs have a spread of 0.0265 against clean's 0.0168. Leakage here didn't inflate the score — it inflated the variance. A leaky pipeline returns a number that is unreliable in both directions, which is worse than one that is reliably optimistic.
+
+## The version-drift claim, also retracted
+
+An earlier revision attributed a gap of 0.6015 (Kaggle, xgboost 3.2.0) versus 0.5613 (local, xgboost 3.4.1) to the xgboost minor version. Given that split noise alone spans 0.0460, a 0.040 gap between two runs on different machines is not evidence of a version effect. The claim is withdrawn; the underlying comparison was never controlled.
+
+Version pinning stays, on its own merits:
+
+- `xgboost==3.4.1` pinned exactly in `requirements.txt`. Everything else is `>=` — a floor, not a pin. Accepted trade-off, not an oversight.
+- Hyperparameters set explicitly rather than inherited, so a future version bump can't silently change the model. Pinning them reproduces 0.5613 exactly, confirming they match 3.4.1's current defaults.
+- Model saved with `save_model`, not pickled — a pickled booster is tied to the version that wrote it.
+- `/ping` reports the running xgboost version.
+- Metrics are reported with the version that produced them.
+
+Both retractions came from the same mistake: a plausible explanation, never tested, that survived several revisions of this README because it sounded right. The controlled runs took under an hour between them.
+
+## Imputed fields
+
+The API accepts partial input — you don't need to send all nine fields. Missing fields are filled with the training-set medians (computed after the split, never before), and the response includes an `imputed_fields` list naming exactly which were filled. Silent imputation hides how much of a prediction is inferred versus measured, which matters for something safety-adjacent.
+
+## Calling `/predict`
+
+```bash
+curl -X POST https://ml-journey-mpqh.onrender.com/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ph": 7.0,
+    "Hardness": 200,
+    "Solids": 15000,
+    "Chloramines": 7,
+    "Sulfate": 300,
+    "Conductivity": 400,
+    "Organic_carbon": 10,
+    "Trihalomethanes": 60,
+    "Turbidity": 4
+  }'
+```
+
+Response (all nine fields — verified identical across local, Docker, and Render):
 
 ```json
 {
@@ -136,65 +159,72 @@ local uvicorn, the Docker container, and the live Render deployment.
 }
 ```
 
-`probability_potable` is raw XGBoost output, not a calibrated
-probability — it orders samples correctly but isn't a true likelihood.
-prediction uses prob > 0.5 to match XGBoost's predict().
-No training sample has exactly 0.5, so >= vs > is equivalent here.
-
-All nine fields are optional. Omitted fields are filled with the
-training medians and named in `imputed_fields`, so a caller can see
-which parts of a prediction came from their data and which came from the
-population. Unknown fields are rejected (`extra="forbid"`).
-
-Note the response above: nine plausible mid-range readings, and the
-model returns 17% potable. The lean toward "not potable" is visible in a
-single call.
-
-`GET /ping` — liveness, artifact status, xgboost version ·
-`GET /docs` — interactive OpenAPI
-
-**Validation** is declared on the schema, so bounds appear in the
-OpenAPI docs rather than living only in the handler. Every field is
-`ge=0`; upper bounds are the dataset maximum plus a 20% buffer — wide
-enough for unusual readings, narrow enough to reject nonsense. `ph` is
-bounded `0–14` on chemical grounds, not by the data. Non-finite values
-are rejected: `1e400` parses as `inf`, and `inf < 0` is `False`, so an
-unbounded check would have passed it straight to the model.
-
-If artifacts are absent the API still starts and returns 503 naming the
-missing files, rather than crashing on import.
-
-## Running it
-The trained model is committed at `models/model.json` — clone and run,
-no training step or download needed.
+Partial input works too:
 
 ```bash
-git clone https://github.com/LuisMckellen/ml--journey
-cd ml--journey
+curl -X POST https://ml-journey-mpqh.onrender.com/predict \
+  -H "Content-Type: application/json" \
+  -d '{"ph": 7.0, "Hardness": 200, "Solids": 15000}'
+```
+
+```json
+{
+  "potability": 0,
+  "probability_potable": 0.2627227306365967,
+  "imputed_fields": [
+    "Chloramines", "Sulfate", "Conductivity",
+    "Organic_carbon", "Trihalomethanes", "Turbidity"
+  ]
+}
+```
+
+Six fields omitted, and the probability moves from 0.170 to 0.263 — same class, materially different number. Six of nine inputs are now population medians rather than measurements, and `imputed_fields` is what tells a caller that.
+
+`potability` is the thresholded class (`probability_potable > 0.5`); `probability_potable` is the raw model output, not a calibrated probability — it orders samples correctly but isn't a true likelihood.
+
+A request with every field `None` is rejected with 422. If model artifacts fail to load, predictions return 503 rather than serving a default guess.
+
+`/ping` returns service health plus the running XGBoost version.
+
+## Docker
+
+```bash
+docker build -t water-potability-api .
+docker run -p 8000:8000 water-potability-api
+curl http://localhost:8000/ping
+```
+
+Image ~472MB content / 1.4GB on disk. Respects `$PORT` (defaults to 8000). Predictions verified byte-identical across local `uvicorn`, Docker, and Render.
+
+## CI
+
+GitHub Actions on every push to `main` and every PR: checkout → Python 3.14.7 → install pinned dependencies → 14 tests → Docker build. A red run blocks the merge — verified on a real test PR before trusting the badge.
+
+## Running locally
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pytest
 uvicorn app.main:api --reload
 ```
 
-To retrain: `python -m src.train`. Docker:
-
-```bash
-docker build -t water-api .
-docker run -p 8000:8000 water-api
-```
-
-Image: 472MB. `.dockerignore` keeps the virtualenv, notebooks, and raw
-data out of the build context.
-
-Tests: `pytest -v` — 14 covering the happy path, missing-field
-imputation, and validation.
+Model artifacts (`models/model.json`, `features.pkl`, `medians.pkl`) are committed — clone and run, no training step required. Retrain: `python -m src.train`. Reproduce the CV numbers: `python -m src.validate`. Reproduce the stability numbers: `python -m src.stability`.
 
 ## Stack
-Python 3.14 · XGBoost 3.4.1 · FastAPI · pandas · pytest · Docker · Render
 
-## Next
+Python 3.14.7, pandas, scikit-learn, XGBoost 3.4.1, FastAPI, Docker, GitHub Actions, deployed on Render.
 
-- 5-fold cross-validation — a mean and a spread instead of one number - done
-- `scale_pos_weight` — does raising recall₁ improve macro F1, and what
-  does it cost recall₀?
-- SHAP feature importance
-- GitHub Actions running pytest on every push - done
+## Other gotchas
+
+**The dtype bug** — an omitted optional field made pandas infer `object` dtype for a column XGBoost expects as numeric. Fixed with explicit `.astype(float)` after `.fillna(medians)`, applied in training and inference both so the two can't diverge. The value was right; the type wasn't, and the error surfaced three layers down in XGBoost rather than where the mistake was.
+
+**A second leak, inside the cross-validation** — the first CV implementation imputed once on the full train split, then folded, so each fold's validation slice contributed to the medians filling its own training rows. Same bug as the original, one level down. Fixing it barely moved the mean (0.5983 → 0.5957) but halved the spread (± 0.0121 → ± 0.0060).
+
+## Still open
+
+- `scale_pos_weight` / class-weighting — and given a split-driven spread of 0.0168, any tuning result under ~0.03 is not distinguishable from noise on a single split. Evaluate across seeds or not at all.
+- SHAP feature importance.
+- Rerun the baseline comparison table across seeds, so the model ordering rests on distributions rather than one draw.
+- `src/train.py`, `src/validate.py`, and `src/stability.py` duplicate the split logic — shared setup should move to a module all three import.
